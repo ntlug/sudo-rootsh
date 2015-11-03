@@ -1,0 +1,118 @@
+#!/bin/sh
+# rootsh
+#
+# A way for anonymous users like root to have i/o tracked.
+#Copyright (C) 2001  Christopher Jay Cox
+#
+#This program is free software; you can redistribute it and/or
+#modify it under the terms of the GNU General Public License
+#as published by the Free Software Foundation; either version 2
+#of the License, or (at your option) any later version.
+#
+#This program is distributed in the hope that it will be useful,
+#but WITHOUT ANY WARRANTY; without even the implied warranty of
+#MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#GNU General Public License for more details.
+#
+#You should have received a copy of the GNU General Public License
+#along with this program; if not, write to the Free Software
+#Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+#
+# Die if something goes wrong!
+#
+set -e
+
+#
+# Avoid direct execution of this script.
+#
+if [ "$USER" != "root" ]; then
+        exit 1
+fi
+
+#
+# locate commands, create variables for them.
+#
+for cmd in gzip; do
+        if [ -x /bin/$cmd ]; then
+                eval ${cmd}cmd=/bin/$cmd
+        elif [ -x /usr/bin/$cmd ]; then
+                eval ${cmd}cmd=/usr/bin/$cmd
+        fi
+done
+
+zext=".Z"
+for cmd in logger date stty ln touch chmod chown su script compress; do
+        if [ -x /bin/$cmd ]; then
+                eval ${cmd}cmd=/bin/$cmd
+        elif [ -x /usr/bin/$cmd ]; then
+                eval ${cmd}cmd=/usr/bin/$cmd
+        else
+                if [ "$cmd" = compress -a "$gzipcmd" ]; then
+                        compresscmd=$gzipcmd
+                        zext=".gz"
+                else
+                        echo "$cmd, not found" >&2
+                        exit 1
+                fi
+        fi
+done
+
+#
+# The uid of the account to ulimately start a login shell as.
+#
+SUDO_TARGET_UID=root
+
+#
+# Directories to store logged data
+#
+SUDODIR=/var/log/${SUDO_TARGET_UID}sh
+SUDOARCHIVE=/var/log/${SUDO_TARGET_UID}sh.archive
+
+#
+# Create a syslog entry for the user of rootsh
+#
+${loggercmd}  -p auth.alert -t SUDO "$SUDO_USER uid:$SUDO_UID gid: $SUDO_GID cmd:$SUDO_COMMAND"
+
+#
+# Save the stty setting since the new shell will have
+# different settings.
+#
+stty=`${sttycmd} -g`
+#
+# Set the root umask to use
+#
+umask 077
+#
+# Save the date of execution for creating unique logs.
+#
+date=`${datecmd} +%y%m%d%H%M%S`
+
+#
+# Create a file name for the typescript log.
+#
+fname=$SUDO_USER:$SUDO_UID:$SUDO_GID:$$_$date
+#
+# The realfile is the ultimate log
+#
+realfile=${SUDOARCHIVE}/$fname
+#
+# Tempfile can be erased when finished.
+#
+tempfile=${SUDODIR}/$fname
+
+#
+# Create the realfile and create a hard link to it.
+#
+${touchcmd} $realfile
+${lncmd} $realfile $tempfile
+${chowncmd} $SUDO_TARGET_UID $realfile
+
+#
+# Change the user to SUDO_TARGET_UID.  On completion, erase the tempfile and
+# compress the realfile.  Then reset the terminal settings.
+#
+exec ${sucmd} - $SUDO_TARGET_UID -c "${scriptcmd} -a $tempfile;
+        /bin/rm -f $tempfile;
+        /bin/sh -c '${compresscmd} $realfile >/dev/null 2>&1';
+        /bin/sh -c '${chmodcmd} -w $realfile${zext} >/dev/null 2>&1';${sttycmd} '$stty'"
